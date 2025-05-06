@@ -1,13 +1,15 @@
 #!/bin/bash
 
 # Script to manually back up Factorio saves to GitHub
-# Run as facserver user: ./manual_save_to_github.sh
-# Assumes /home/facserver/factorio/saves is a symbolic link to /home/facserver/FactorioServer/saves
+# Run as facserver user: ./manual_save_to_github.sh [--force]
 # Logs to ~/factorio_backup.log
+# Pushes changes to GitHub repository
+# Checks saves symlink integrity
 
 # Configuration
 REPO_DIR="/home/facserver/FactorioServer"
-REPO_SAVES_DIR="$REPO_DIR/saves"
+SAVES_DIR="$REPO_DIR/saves"
+FACTORIO_SAVES="/home/facserver/factorio/saves"
 LOG_FILE="/home/facserver/factorio_backup.log"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -16,45 +18,75 @@ log() {
     echo "[$TIMESTAMP] $1" >> "$LOG_FILE"
 }
 
-# Check if directories exist
+# Check for required commands
+for cmd in git; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: $cmd is required. Install it with: sudo apt install $cmd"
+        log "Error: $cmd is required."
+        exit 1
+    fi
+done
+
+# Check if repository directory exists
 if [ ! -d "$REPO_DIR" ]; then
-    echo "Error: Git repository directory $REPO_DIR not found."
-    log "Error: Git repository directory $REPO_DIR not found."
-    exit 1
-fi
-if [ ! -d "$REPO_SAVES_DIR" ]; then
-    echo "Error: Saves directory $REPO_SAVES_DIR not found."
-    log "Error: Saves directory $REPO_SAVES_DIR not found."
+    echo "Error: Repository directory $REPO_DIR not found."
+    log "Error: Repository directory $REPO_DIR not found."
     exit 1
 fi
 
-# Commit and push to GitHub
-cd "$REPO_DIR" || {
-    echo "Error: Failed to change to $REPO_DIR."
-    log "Error: Failed to change to $REPO_DIR."
+# Check if saves directory exists
+if [ ! -d "$SAVES_DIR" ]; then
+    echo "Error: Saves directory $SAVES_DIR not found."
+    log "Error: Saves directory $SAVES_DIR not found."
     exit 1
-}
-echo "Committing changes..."
-log "Committing changes..."
-git add saves
-if git commit -m "Manual saves backup $TIMESTAMP"; then
-    echo "Changes committed."
-    log "Changes committed."
-else
-    echo "No changes to commit."
-    log "No changes to commit."
 fi
 
+# Check saves symlink
+if [ ! -L "$FACTORIO_SAVES" ] || [ "$(readlink -f "$FACTORIO_SAVES")" != "$SAVES_DIR" ]; then
+    echo "Error: Saves symlink $FACTORIO_SAVES is missing or broken (should point to $SAVES_DIR)."
+    echo "Fix by running:"
+    echo "  rm -rf $FACTORIO_SAVES"
+    echo "  ln -s $SAVES_DIR $FACTORIO_SAVES"
+    log "Error: Saves symlink $FACTORIO_SAVES is missing or broken."
+    exit 1
+fi
+
+# Navigate to repository
+cd "$REPO_DIR" || { echo "Error: Failed to change to $REPO_DIR"; log "Error: Failed to change to $REPO_DIR"; exit 1; }
+
+# Check for --force flag
+FORCE_COMMIT=false
+if [ "$1" == "--force" ]; then
+    FORCE_COMMIT=true
+fi
+
+# Check for changes
+git add saves/*
+if git diff --staged --quiet && [ "$FORCE_COMMIT" != "true" ]; then
+    echo "No changes in saves to commit."
+    log "No changes in saves to commit."
+    exit 0
+fi
+
+# Commit changes
+echo "Committing save changes..."
+log "Committing save changes..."
+git commit -m "Manual backup $TIMESTAMP"
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to commit changes."
+    log "Error: Failed to commit changes."
+    exit 1
+fi
+
+# Push to GitHub
 echo "Pushing to GitHub..."
 log "Pushing to GitHub..."
-if git push origin main; then
-    echo "Successfully pushed to GitHub."
-    log "Successfully pushed to GitHub."
-else
-    echo "Error: Failed to push to GitHub."
+git push origin main
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to push to GitHub. Check authentication or remote configuration."
     log "Error: Failed to push to GitHub."
     exit 1
 fi
 
-echo "Manual backup completed successfully."
-log "Manual backup completed successfully."
+echo "Saves successfully backed up to GitHub."
+log "Saves successfully backed up to GitHub."
